@@ -4,6 +4,7 @@ A reimplementation of the [original paper](https://www.cs.cmu.edu/~rsalakhu/pape
 training and testing on the [Omniglot dataset](https://github.com/brendenlake/omniglot).
 
 ## requirement
+
 - pytorch
 - torchvision
 - python3.5+
@@ -12,7 +13,9 @@ training and testing on the [Omniglot dataset](https://github.com/brendenlake/om
 See requirements.txt 
 
 ## run step
+
 - download dataset
+
 ```
 git clone https://github.com/brendenlake/omniglot.git
 cd omniglot/python
@@ -22,15 +25,18 @@ cd ../..
 # setup directory for saving models
 mkdir models
 ```
+
 - train and test by running
+
 ```shell
-python3 train.py --train_path trainset_demo/train \
-                 --test_path  trainset_demo/test \
-                 --gpu_ids 1 \
+python3 train.py --train_path ../trainset_demo/sub_match_data/train \
+                 --test_path  ../trainset_demo/sub_match_data/test \
+                 --gpu_ids 0 \
                  --model_path models
 ```
 
 ## experiment result
+
 Loss value is sampled after every 200 batches
 ![img](https://github.com/fangpin/siamese-network/blob/master/loss.png)
 My final precision is 89.5% a little smaller than the result of the paper (92%).

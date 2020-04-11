@@ -8,7 +8,7 @@ from mydataset import OmniglotTrain, OmniglotTest
 from torch.utils.data import DataLoader
 from torch.autograd import Variable
 import matplotlib.pyplot as plt
-from model import Siamese_ResNet, Bottleneck
+from model import Siamese
 import time
 import numpy as np
 import gflags
@@ -16,8 +16,48 @@ import sys
 from collections import deque
 import os
 import torch.nn as nn
+from mmdet.apis import init_detector, inference_detector
+import numpy as np
+from mmcv import imshow_bboxes
+
+def get_model(config_file='configs/my.py',
+              checkpoint_file='work_dirs/retinanet_x101_64x4d_fpn_1x/latest.pth',
+              device='cuda:0'):
+    model = init_detector(config_file, checkpoint_file, device=device)
+    return model
+
+def get_result_box(result, score_thr=0.7):
+    '''
+    :param score_thr: 后处理，只输出概率值大于thr的框
+    :return: bboxes_over_thr 是array，输出格式是(N,5),N个满足条件的框
+             每个框与5个值，前4个是位置信息，最后一个是概率值 0-1
+    '''
+    if isinstance(result, tuple):
+        bbox_result, segm_result = result
+    else:
+        bbox_result, segm_result = result, None
+    bboxes = np.vstack(bbox_result)
+    labels = [
+        np.full(bbox.shape[0], i, dtype=np.int32)
+        for i, bbox in enumerate(result)
+    ]
+    labels = np.concatenate(labels)
+    inds = np.where(bboxes[:, -1] > score_thr)[0]
+    bboxes_over_thr = bboxes[inds]
+    labels_over_thr = labels[inds]
+    return bboxes_over_thr,labels_over_thr
+
+
+def get_result_and_feats(model,img,score_thr=0.7):
+
+    result, roi_feats = inference_detector(model, img)
+    # print(result)
+    bboxes_over_thr,labels_over_thr = get_result_box(result, score_thr=score_thr)
+    return bboxes_over_thr, labels_over_thr, roi_feats
+
 
 if __name__ == '__main__':
+
     Flags = gflags.FLAGS
     gflags.DEFINE_bool("cuda", True, "use cuda")
     gflags.DEFINE_string("train_path", "/home/niexing/projects/Tianchi/siamese-pytorch/trainset_demo/train", "training folder")
@@ -41,45 +81,42 @@ if __name__ == '__main__':
         transforms.ToTensor()
     ])
 
-
     # train_dataset = dset.ImageFolder(root=Flags.train_path)
     # test_dataset = dset.ImageFolder(root=Flags.test_path)
 
-
     os.environ["CUDA_VISIBLE_DEVICES"] = Flags.gpu_ids
     print("use gpu:", Flags.gpu_ids, "to train.")
-
-    trainSet = OmniglotTrain(Flags.train_path, transform=data_transforms)
-    testSet = OmniglotTest(Flags.test_path, transform=transforms.ToTensor(), times = Flags.times, way = Flags.way)
-    testLoader = DataLoader(testSet, batch_size=Flags.way, shuffle=False, num_workers=Flags.workers)
-
+    
+    # trainSet = OmniglotTrain(Flags.train_path, transform=data_transforms)
+    trainSet = OmniglotTrain(Flags.train_path)
     trainLoader = DataLoader(trainSet, batch_size=Flags.batch_size, shuffle=False, num_workers=Flags.workers)
 
+    testSet = OmniglotTest(Flags.test_path, transform=transforms.ToTensor(), times = Flags.times, way = Flags.way)
+    testLoader = DataLoader(testSet, batch_size=Flags.way, shuffle=False, num_workers=Flags.workers)
+    
+    # import pdb;pdb.set_trace()
     loss_fn = torch.nn.BCEWithLogitsLoss(size_average=True)
 
     # net = Siamese(ResidualBlock)
+    # resnet50 = torchvision.models.resnet50(pretrained=True)
+    # # for param in resnet18.parameters():
+    # #     param.requires_grad = False
+    # num_ftrs = resnet50.fc.in_features
+    # resnet50.fc = nn.Linear(num_ftrs, 1)#将全连接层做出改变类别改为一类
 
-
-    resnet50 = torchvision.models.resnet50(pretrained=True)
-    # for param in resnet18.parameters():
-    #     param.requires_grad = False
-    num_ftrs = resnet50.fc.in_features
-    resnet50.fc = nn.Linear(num_ftrs, 1)#将全连接层做出改变类别改为一类
-
-    net = Siamese_ResNet([3, 4, 6, 3])
-    #读取参数
-    pretrained_dict = resnet50.state_dict()
-    model_dict = net.state_dict()
-    # 将pretrained_dict里不属于model_dict的键剔除掉
-    pretrained_dict =  {k: v for k, v in pretrained_dict.items() if k in model_dict}
-    # 更新现有的model_dict
-    model_dict.update(pretrained_dict)
-    # 加载真正需要的state_dict
-    net.load_state_dict(model_dict)
-    # print(resnet18)
-    # print(net)
-    # import pdb; pdb.set_trace()
-
+    # net = Siamese_ResNet([3, 4, 6, 3])
+    # #读取参数
+    # pretrained_dict = resnet50.state_dict()
+    # model_dict = net.state_dict()
+    # # 将pretrained_dict里不属于model_dict的键剔除掉
+    # pretrained_dict =  {k: v for k, v in pretrained_dict.items() if k in model_dict}
+    # # 更新现有的model_dict
+    # model_dict.update(pretrained_dict)
+    # # 加载真正需要的state_dict
+    # net.load_state_dict(model_dict)
+    
+    net = Siamese()
+    
     # multi gpu
     if len(Flags.gpu_ids.split(",")) > 1:
         net = torch.nn.DataParallel(net)
@@ -88,16 +125,18 @@ if __name__ == '__main__':
         net.cuda()
 
     net.train()
-
-    optimizer = torch.optim.Adam(net.parameters(),lr = Flags.lr )
+    
+    optimizer = torch.optim.Adam(net.parameters(),lr = Flags.lr)
     optimizer.zero_grad()
-
+    
     train_loss = []
     loss_val = 0
     time_start = time.time()
     queue = deque(maxlen=20)
-
+    
     for batch_id, (img1, img2, label) in enumerate(trainLoader, 1):
+    # for batch_id, data_0 in enumerate(trainLoader, 1):
+        # (img1, img2, label) = data_0  
         if batch_id > Flags.max_iter:
             break
         if Flags.cuda:
@@ -107,6 +146,7 @@ if __name__ == '__main__':
         optimizer.zero_grad()
         # with torch.no_grad():
         #     output = net.forward(img1, img2)
+        
         output = net.forward(img1, img2)
         loss = loss_fn(output, label)
         loss_val += loss.item()
